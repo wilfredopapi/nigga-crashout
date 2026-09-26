@@ -1,0 +1,366 @@
+local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local Settings = {
+    SoftAim = false,
+    SoftAimFOV = 180,
+    SoftAimSmooth = 0.85,
+    InfiniteJump = false,
+    Speed = false,
+    SpeedValue = 50,
+    ESP = false,
+    WeaponESP = false,
+    Noclip = false,
+    RespawnAtDeath = false,
+    InfiniteStamina = false,
+    IgnoreFriends = true
+}
+
+local ESPFolder = Instance.new("Folder")
+ESPFolder.Name = "CrashoutESP"
+ESPFolder.Parent = game:GetService("CoreGui")
+
+local lastDeathCFrame = nil
+local character, humanoid, root = nil, nil, nil
+local FriendCache = {}
+
+local function isFriend(plr)
+    if not Settings.IgnoreFriends or plr == LocalPlayer then return false end
+    local uid = plr.UserId
+    if FriendCache[uid] ~= nil then return FriendCache[uid] end
+    local ok, result = pcall(function() return LocalPlayer:IsFriendsWith(uid) end)
+    FriendCache[uid] = (ok and result) or false
+    return FriendCache[uid]
+end
+
+local function getClosestPlayer()
+    local closest, closestDist = nil, Settings.SoftAimFOV
+    local myChar = LocalPlayer.Character
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+    local myPos = myChar.HumanoidRootPart.Position
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") and plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0 then
+            if isFriend(plr) then continue end
+            local pos = plr.Character.HumanoidRootPart.Position
+            local dist = (pos - myPos).Magnitude
+            local _, onScreen = Camera:WorldToViewportPoint(pos)
+            if onScreen and dist < closestDist then
+                closestDist = dist
+                closest = plr
+            end
+        end
+    end
+    return closest
+end
+
+local function softAimLoop()
+    if not Settings.SoftAim then return end
+    local target = getClosestPlayer()
+    if target and target.Character and target.Character:FindFirstChild("Head") then
+        local head = target.Character.Head
+        local current = Camera.CFrame
+        local goal = CFrame.new(current.Position, head.Position)
+        Camera.CFrame = current:Lerp(goal, math.clamp(Settings.SoftAimSmooth, 0.01, 1))
+    end
+end
+
+local function getCurrentWeapon(plr)
+    local char = plr.Character
+    if not char then return "None" end
+    local tool = char:FindFirstChildOfClass("Tool")
+    return tool and tool.Name or "None"
+end
+
+local function createESP(plr)
+    if plr == LocalPlayer or isFriend(plr) then return end
+    local old = ESPFolder:FindFirstChild(plr.Name)
+    if old then old:Destroy() end
+    local char = plr.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = plr.Name
+    billboard.Adornee = char.HumanoidRootPart
+    billboard.Size = UDim2.new(0, 220, 0, 70)
+    billboard.StudsOffset = Vector3.new(0, 3.2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = ESPFolder
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Name = "Name"
+    nameLabel.Size = UDim2.new(1, 0, 0, 22)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = plr.Name
+    nameLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+    nameLabel.TextStrokeTransparency = 0.3
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 14
+    nameLabel.Parent = billboard
+
+    local distLabel = Instance.new("TextLabel")
+    distLabel.Name = "Dist"
+    distLabel.Size = UDim2.new(1, 0, 0, 18)
+    distLabel.Position = UDim2.new(0, 0, 0, 22)
+    distLabel.BackgroundTransparency = 1
+    distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    distLabel.TextStrokeTransparency = 0.4
+    distLabel.Font = Enum.Font.Gotham
+    distLabel.TextSize = 12
+    distLabel.Parent = billboard
+
+    local weaponLabel = Instance.new("TextLabel")
+    weaponLabel.Name = "Weapon"
+    weaponLabel.Size = UDim2.new(1, 0, 0, 18)
+    weaponLabel.Position = UDim2.new(0, 0, 0, 40)
+    weaponLabel.BackgroundTransparency = 1
+    weaponLabel.TextColor3 = Color3.fromRGB(255, 200, 50)
+    weaponLabel.TextStrokeTransparency = 0.3
+    weaponLabel.Font = Enum.Font.GothamBold
+    weaponLabel.TextSize = 12
+    weaponLabel.Parent = billboard
+
+    local box = Instance.new("BoxHandleAdornment")
+    box.Name = "Box"
+    box.Adornee = char.HumanoidRootPart
+    box.AlwaysOnTop = true
+    box.ZIndex = 10
+    box.Size = Vector3.new(4, 6, 2)
+    box.Transparency = 0.6
+    box.Color3 = Color3.fromRGB(255, 0, 0)
+    box.Parent = ESPFolder
+
+    local conn
+    conn = RunService.RenderStepped:Connect(function()
+        if not plr.Character or not plr.Character:FindFirstChild("HumanoidRootPart") or not plr.Character:FindFirstChild("Humanoid") or plr.Character.Humanoid.Health <= 0 or isFriend(plr) then
+            billboard:Destroy()
+            box:Destroy()
+            if conn then conn:Disconnect() end
+            return
+        end
+        if not Settings.ESP and not Settings.WeaponESP then
+            billboard:Destroy()
+            box:Destroy()
+            if conn then conn:Disconnect() end
+            return
+        end
+        local hrp = plr.Character.HumanoidRootPart
+        local dist = 0
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            dist = (hrp.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+        end
+        if Settings.ESP then
+            nameLabel.Visible = true
+            distLabel.Visible = true
+            distLabel.Text = string.format("%.0f studs", dist)
+            box.Visible = true
+            box.Adornee = hrp
+        else
+            nameLabel.Visible = false
+            distLabel.Visible = false
+            box.Visible = false
+        end
+        if Settings.WeaponESP then
+            weaponLabel.Visible = true
+            weaponLabel.Text = "🔫 " .. getCurrentWeapon(plr)
+        else
+            weaponLabel.Visible = false
+        end
+        billboard.Adornee = hrp
+    end)
+end
+
+local function refreshESP()
+    for _, v in pairs(ESPFolder:GetChildren()) do v:Destroy() end
+    if not Settings.ESP and not Settings.WeaponESP then return end
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then createESP(plr) end
+    end
+end
+
+local function onCharacterAdded(char)
+    character = char
+    humanoid = char:WaitForChild("Humanoid")
+    root = char:WaitForChild("HumanoidRootPart")
+    humanoid.Died:Connect(function()
+        if Settings.RespawnAtDeath and root then lastDeathCFrame = root.CFrame end
+    end)
+    if Settings.RespawnAtDeath and lastDeathCFrame then
+        task.wait(0.15)
+        if root then root.CFrame = lastDeathCFrame end
+    end
+    if Settings.InfiniteJump then
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+    end
+end
+
+if LocalPlayer.Character then onCharacterAdded(LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
+
+RunService.Heartbeat:Connect(function()
+    softAimLoop()
+    if Settings.Speed and humanoid then
+        humanoid.WalkSpeed = Settings.SpeedValue
+    elseif humanoid and not Settings.Speed then
+        humanoid.WalkSpeed = 16
+    end
+    if Settings.InfiniteStamina and humanoid then
+        humanoid.WalkSpeed = math.max(humanoid.WalkSpeed, Settings.Speed and Settings.SpeedValue or 16)
+        humanoid.JumpPower = 50
+        pcall(function()
+            humanoid:SetAttribute("Stamina", 100)
+            if humanoid:FindFirstChild("Stamina") then humanoid.Stamina.Value = 100 end
+        end)
+    end
+    if Settings.Noclip and character then
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+                part.CanTouch = false
+            end
+        end
+        if root then root.CanCollide = false root.CanTouch = false end
+        if humanoid then humanoid:ChangeState(Enum.HumanoidStateType.RunningNoPhysics) end
+    elseif character and not Settings.Noclip then
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                part.CanCollide = true
+            end
+        end
+        if root then root.CanCollide = true end
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if Settings.InfiniteJump and humanoid then
+        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+end)
+
+local function hookPlayer(plr)
+    if plr == LocalPlayer then return end
+    plr.CharacterAdded:Connect(function()
+        task.wait(0.4)
+        if Settings.ESP or Settings.WeaponESP then createESP(plr) end
+    end)
+    if plr.Character and (Settings.ESP or Settings.WeaponESP) then
+        task.spawn(function()
+            task.wait(0.3)
+            createESP(plr)
+        end)
+    end
+end
+
+for _, plr in pairs(Players:GetPlayers()) do hookPlayer(plr) end
+Players.PlayerAdded:Connect(function(plr)
+    FriendCache[plr.UserId] = nil
+    hookPlayer(plr)
+end)
+Players.PlayerRemoving:Connect(function(plr)
+    FriendCache[plr.UserId] = nil
+    local esp = ESPFolder:FindFirstChild(plr.Name)
+    if esp then esp:Destroy() end
+end)
+
+-- ============ WINDUI ============
+local Window = WindUI:CreateWindow({
+    Title = "nigga crashout",
+    Icon = "crosshair",
+    Theme = "Sky",          -- azul / cyan
+    Folder = "CrashoutHub",
+    Size = UDim2.fromOffset(520, 420),
+})
+
+local CombatTab = Window:Tab({ Title = "Combat", Icon = "sword" })
+local ESPTab = Window:Tab({ Title = "ESP", Icon = "eye" })
+local MiscTab = Window:Tab({ Title = "Misc", Icon = "settings" })
+
+CombatTab:Toggle({
+    Title = "Soft Aim",
+    Value = false,
+    Callback = function(v) Settings.SoftAim = v end
+})
+CombatTab:Slider({
+    Title = "Aim Smooth",
+    Step = 0.01,
+    Value = { Min = 0.01, Max = 1, Default = 0.85 },
+    Callback = function(v) Settings.SoftAimSmooth = v end
+})
+CombatTab:Slider({
+    Title = "Soft Aim FOV",
+    Step = 5,
+    Value = { Min = 50, Max = 400, Default = 180 },
+    Callback = function(v) Settings.SoftAimFOV = v end
+})
+
+ESPTab:Toggle({
+    Title = "ESP Nombres + Caja",
+    Value = false,
+    Callback = function(v)
+        Settings.ESP = v
+        refreshESP()
+    end
+})
+ESPTab:Toggle({
+    Title = "ESP Armas",
+    Value = false,
+    Callback = function(v)
+        Settings.WeaponESP = v
+        refreshESP()
+    end
+})
+ESPTab:Toggle({
+    Title = "Ignore Friends",
+    Value = true,
+    Callback = function(v)
+        Settings.IgnoreFriends = v
+        refreshESP()
+    end
+})
+
+MiscTab:Toggle({
+    Title = "Speed",
+    Value = false,
+    Callback = function(v) Settings.Speed = v end
+})
+MiscTab:Slider({
+    Title = "Speed Value",
+    Step = 1,
+    Value = { Min = 16, Max = 200, Default = 50 },
+    Callback = function(v)
+        Settings.SpeedValue = v
+        if Settings.Speed and humanoid then humanoid.WalkSpeed = v end
+    end
+})
+MiscTab:Toggle({
+    Title = "Infinite Jump",
+    Value = false,
+    Callback = function(v) Settings.InfiniteJump = v end
+})
+MiscTab:Toggle({
+    Title = "Noclip",
+    Value = false,
+    Callback = function(v) Settings.Noclip = v end
+})
+MiscTab:Toggle({
+    Title = "Respawn en Muerte",
+    Value = false,
+    Callback = function(v) Settings.RespawnAtDeath = v end
+})
+MiscTab:Toggle({
+    Title = "Infinite Stamina",
+    Value = false,
+    Callback = function(v) Settings.InfiniteStamina = v end
+})
+
+WindUI:Notify({
+    Title = "nigga crashout",
+    Content = "WindUI + SoftAim listo.",
+    Duration = 4
+})
+
+print("[nigga crashout] WindUI oficial cargado.")
